@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "id": "cn.star.skill-learning",
+  "name": "Skill Learning",
+  "version": "0.1.4",
+  "description": "Turns finished agent work into reusable SKILL.md files under ~/.agents/skills/.",
+  "author": "TheFlareStar",
+  "license": "MIT",
+  "i18n": {
+    "en": {
+      "name": "Skill Learning",
+      "description": "Turns finished agent work into reusable SKILL.md files under ~/.agents/skills/.",
+      "safetyNotes": "Requests agent.extension (unsandboxed sidecar code, same trust as the agent itself), agent.complete (one-shot LLM with tools disabled), and agent.prompt.inject (a short catalog skill). Skill files are written with Node fs only as direct children of ~/.agents/skills/<name>/ or <project>/.agents/skills/<name>/. User/marketplace skills this plugin did not create are never modified. Background review does not post into the chat transcript."
+    },
+    "zh-CN": {
+      "name": "技能学习",
+      "description": "把做完的工作沉淀为 ~/.agents/skills/<name>/ 下的可复用 SKILL.md，技能界面可见。",
+      "safetyNotes": "需要 agent.extension（在 sidecar 内运行，信任级别与 Agent 相同）、agent.complete（无工具的一次性补全）、agent.prompt.inject（一条短目录 skill）。写盘只用 Node fs，且写成技能界面能扫到的直接子目录；不改本插件未创建的用户/市场 skill。后台复盘不写入聊天。"
+    }
+  },
+  "main": "main.js",
+  "contributes": {
+    "agentExtensions": ["src/extension.js"],
+    "skills": ["skills/skill-learning.md"],
+    "commands": [
+      {
+        "id": "skill-learning.open",
+        "title": "Skill Learning: Library",
+        "keywords": ["skill", "learn", "library"]
+      },
+      {
+        "id": "skill-learning.review-now",
+        "title": "Skill Learning: Drain review queue",
+        "keywords": ["skill", "review"]
+      }
+    ],
+    "views": [
+      {
+        "id": "library",
+        "title": { "en": "Learned skills", "zh-CN": "已学技能" },
+        "icon": "book",
+        "entry": "views/library.html",
+        "order": 40
+      }
+    ],
+    "services": [{ "id": "reviewer", "label": "Skill review worker" }],
+    "settings": [
+      {
+        "key": "enabled",
+        "title": "Enable learning loop",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "reviewEnabled",
+        "title": "Background review after long turns",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "reviewAfterToolCalls",
+        "title": "Min tool calls before review",
+        "type": "number",
+        "default": 10
+      },
+      {
+        "key": "scope",
+        "title": "Skill scope",
+        "type": "select",
+        "default": "global",
+        "enum": [
+          { "label": "Global (~/.agents/skills)", "value": "global" },
+          { "label": "Project (.agents/skills)", "value": "project" }
+        ]
+      },
+      {
+        "key": "writeApproval",
+        "title": "Write approval",
+        "type": "select",
+        "default": "notify",
+        "enum": [
+          { "label": "Silent", "value": "off" },
+          { "label": "Toast on write", "value": "notify" }
+        ]
+      },
+      {
+        "key": "modelKey",
+        "title": "Review model (providerId/modelId, empty = first available)",
+        "type": "string",
+        "default": ""
+      }
+    ]
+  },
+  "permissions": [
+    "agent.extension",
+    "agent.complete",
+    "agent.prompt.inject",
+    "background.service",
+    "ui.view",
+    "notify",
+    "models.list"
+  ],
+  "engines": { "piDesktop": ">=0.14.0" },
+  "activationEvents": ["onStartup"]
+}
