@@ -9,15 +9,24 @@
 const path = require("node:path");
 const fs = require("node:fs");
 
-function loadLocal(rel) {
-  const resolved = require.resolve(rel);
-  delete require.cache[resolved];
-  return require(resolved);
+try {
+  delete require.cache[require.resolve("./skill-store.js")];
+} catch {
+  /* not cached yet */
 }
-
-const store = loadLocal("./skill-store.js");
-const prompts = loadLocal("./review-prompt.js");
-const compose = loadLocal("./prompt-compose.js");
+try {
+  delete require.cache[require.resolve("./review-prompt.js")];
+} catch {
+  /* not cached yet */
+}
+try {
+  delete require.cache[require.resolve("./prompt-compose.js")];
+} catch {
+  /* not cached yet */
+}
+const store = require("./skill-store.js");
+const prompts = require("./review-prompt.js");
+const compose = require("./prompt-compose.js");
 const PLUGIN_VERSION = "0.1.8";
 const PLUGIN_ID = "cn.star.skill-learning";
 
