@@ -10,6 +10,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const store = require("./src/skill-store.js");
 const prompts = require("./src/review-prompt.js");
+const apply = require("./src/review-apply.js");
+
+const PLUGIN_VERSION = "0.1.8";
 
 let pollTimer;
 let running = false;
@@ -38,20 +41,33 @@ async function syncConfigFromSettings() {
 }
 
 function extractJson(text) {
-  const raw = String(text || "").trim();
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const body = fenced ? fenced[1] : raw;
-  const start = body.indexOf("{");
-  const end = body.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("review output had no JSON object");
-  return JSON.parse(body.slice(start, end + 1));
+  return apply.extractJson(text);
 }
 
 async function resolveModelKey(configured) {
   if (configured && String(configured).includes("/")) return String(configured);
   const models = await pi.models.list();
   if (!Array.isArray(models) || !models.length) throw new Error("no authenticated model for review");
-  return models[0].key;
+  const grok = models.find((m) => /grok/i.test(String(m.key || m.id || m.modelId || "")));
+  return (grok && grok.key) || models[0].key;
+}
+
+function writeLastReview(root, summary) {
+  try {
+    store.atomicWrite(path.join(store.metaDir(root), "last-review.json"), `${JSON.stringify({ pluginVersion: PLUGIN_VERSION, ...summary }, null, 2)}
+`);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function completeReview(modelKey, userContent) {
+  const completion = await pi.agent.complete({
+    modelKey,
+    system: prompts.REVIEW_SYSTEM,
+    messages: [{ role: "user", content: userContent }],
+  });
+  return apply.completionText(completion);
 }
 
 async function processJob(file) {
@@ -64,24 +80,41 @@ async function processJob(file) {
     return;
   }
   const modelKey = await resolveModelKey(cfg.modelKey);
-  const completion = await pi.agent.complete({
-    modelKey,
-    system: prompts.REVIEW_SYSTEM,
-    messages: [{ role: "user", content: prompts.packReviewUser(job) }],
-  });
-  const parsed = extractJson(completion && completion.text);
-  const decision = parsed && parsed.decision === "update" ? "update" : "skip";
-  const ops = decision === "update" && Array.isArray(parsed.ops) ? parsed.ops : [];
-  const applied = ops.length ? store.applyOps(root, ops, "agent") : [];
+  let user = prompts.packReviewUser(job);
+  let text;
+  try {
+    text = await completeReview(modelKey, user);
+  } catch (err) {
+    const msg = String(err && err.message ? err.message : err);
+    if (!/timed out|timeout/i.test(msg)) throw err;
+    text = await completeReview(modelKey, apply.shrinkReviewUser(user, 40000));
+  }
+  let parsed;
+  try {
+    parsed = apply.extractJson(text);
+  } catch (err) {
+    text = await completeReview(
+      modelKey,
+      apply.shrinkReviewUser(`${user}
+
+Previous output was not JSON. Return ONLY the JSON object.`, 40000),
+    );
+    parsed = apply.extractJson(text);
+  }
+  const normalized = apply.normalizeReview(parsed);
+  const applied = normalized.ops.length ? store.applyOps(root, normalized.ops, "agent") : [];
   const summary = {
     id: job.id,
-    decision,
-    reason: parsed && parsed.reason,
+    decision: normalized.decision,
+    reason: normalized.reason,
     applied,
     modelKey,
+    pluginVersion: PLUGIN_VERSION,
     at: new Date().toISOString(),
   };
-  store.atomicWrite(file.replace(/\.json$/, ".done.json"), `${JSON.stringify(summary, null, 2)}\n`);
+  store.atomicWrite(file.replace(/\.json$/, ".done.json"), `${JSON.stringify(summary, null, 2)}
+`);
+  writeLastReview(root, summary);
   try {
     fs.unlinkSync(file);
   } catch {
@@ -94,8 +127,8 @@ async function processJob(file) {
     if (wrote.length) {
       const names = wrote.map((r) => r.result.name).join(", ");
       await pi.ui.showToast(`Learned skill: ${names}`);
-    } else if (decision === "skip") {
-      // stay quiet on skip — avoid toast spam
+    } else if (normalized.decision === "skip") {
+      // stay quiet on skip
     } else if (failed.length) {
       await pi.ui.showToast(`Skill review failed: ${failed[0].error}`);
     }
@@ -186,9 +219,10 @@ async function onLoad() {
     id: "reviewer",
     start: ({ log }) => {
       log("skill-learning reviewer started");
+      void pollQueue();
       pollTimer = setInterval(() => {
         void pollQueue();
-      }, 5000);
+      }, 3000);
     },
     stop: () => {
       clearInterval(pollTimer);

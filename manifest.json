@@ -2,19 +2,19 @@
   "schemaVersion": 1,
   "id": "cn.star.skill-learning",
   "name": "Skill Learning",
-  "version": "0.1.7",
-  "description": "Turns finished agent work into reusable SKILL.md files under ~/.agents/skills/.",
+  "version": "0.1.8",
+  "description": "Turns finished work into SKILL.md. Long sessions get a silent background review.",
   "author": "TheFlareStar",
-  "license": "MIT",
+  "license": "MPL-2.0",
   "i18n": {
     "en": {
       "name": "Skill Learning",
-      "description": "Turns finished agent work into reusable SKILL.md files under ~/.agents/skills/.",
+      "description": "Turns finished work into SKILL.md. Long sessions get a silent background review.",
       "safetyNotes": "Requests agent.extension (unsandboxed sidecar code, same trust as the agent itself), agent.complete (one-shot LLM with tools disabled), and agent.prompt.inject (a short catalog skill). Skill files are written with Node fs only as direct children of ~/.agents/skills/<name>/ or <project>/.agents/skills/<name>/. User/marketplace skills this plugin did not create are never modified. Background review does not post into the chat transcript."
     },
     "zh-CN": {
       "name": "技能学习",
-      "description": "把做完的工作沉淀为 ~/.agents/skills/<name>/ 下的可复用 SKILL.md，技能界面可见。",
+      "description": "做完一轮把还能再用的流程写成 SKILL.md。长会话会静默复盘。",
       "safetyNotes": "需要 agent.extension（在 sidecar 内运行，信任级别与 Agent 相同）、agent.complete（无工具的一次性补全）、agent.prompt.inject（一条短目录 skill）。写盘只用 Node fs，且写成技能界面能扫到的直接子目录；不改本插件未创建的用户/市场 skill。后台复盘不写入聊天。"
     }
   },

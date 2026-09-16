@@ -18,7 +18,7 @@ function loadLocal(rel) {
 const store = loadLocal("./skill-store.js");
 const prompts = loadLocal("./review-prompt.js");
 const compose = loadLocal("./prompt-compose.js");
-const PLUGIN_VERSION = "0.1.7";
+const PLUGIN_VERSION = "0.1.8";
 const PLUGIN_ID = "cn.star.skill-learning";
 
 let Type;
@@ -65,10 +65,55 @@ const turn = {
   toolCalls: 0,
   usedSkillManage: false,
   readNames: new Set(),
+  seenToolIds: new Set(),
+  trace: [],
   cwd: undefined,
 };
 
 let lastReviewAt = 0;
+
+function resetTurn(ctx) {
+  turn.toolCalls = 0;
+  turn.usedSkillManage = false;
+  turn.readNames = new Set();
+  turn.seenToolIds = new Set();
+  turn.trace = [];
+  if (ctx && ctx.cwd) turn.cwd = ctx.cwd;
+}
+
+function noteTool(event) {
+  const id = String((event && (event.toolCallId || event.id)) || "");
+  const name = String((event && (event.toolName || event.name)) || "");
+  const key = id || `${name}:${turn.toolCalls}`;
+  if (turn.seenToolIds.has(key)) return;
+  turn.seenToolIds.add(key);
+  turn.toolCalls += 1;
+  if (name === "skill_manage") turn.usedSkillManage = true;
+  const input = event && (event.input !== undefined ? event.input : event.args || event.arguments);
+  const filePath = String((input && (input.path || input.file_path || input.filePath)) || "");
+  if (String(name).toLowerCase() === "read" && /SKILL\.md$/i.test(filePath)) {
+    const parts = filePath.split("\\").join("/").split("/");
+    const idx = parts.lastIndexOf("skills");
+    if (idx >= 0 && parts[idx + 1] && parts[idx + 2] === "SKILL.md" && !parts[idx + 1].startsWith(".")) {
+      turn.readNames.add(parts[idx + 1]);
+    }
+  }
+  turn.trace.push({
+    role: "tool",
+    toolName: name || undefined,
+    content: `${name} ${JSON.stringify(input || {}).slice(0, 800)}`.slice(0, 1500),
+  });
+}
+
+function logEnqueue(root, message) {
+  try {
+    store.ensureDir(store.metaDir(root));
+    fs.appendFileSync(path.join(store.metaDir(root), "enqueue.log"), `${new Date().toISOString()} ${message}
+`, "utf8");
+  } catch {
+    /* ignore */
+  }
+}
 
 function currentRoot(cwd) {
   const globalRoot = store.learnedRoot({ scope: "global" });
@@ -195,31 +240,24 @@ function skillLearningExtension(pi) {
     },
   });
 
-  // Do not return { systemPrompt } — PI keeps only the last extension's
-  // replacement, which would wipe USER PROFILE. User Profile 0.1.4+ inlines
-  // this plugin's NUDGE from the installed review-prompt.js.
-  pi.on("before_agent_start", async () => undefined);
+  // Grok Enhance owns { systemPrompt }. Never return a replacement here.
+  pi.on("before_agent_start", (_event, ctx) => {
+    resetTurn(ctx);
+    return undefined;
+  });
 
   pi.on("agent_start", (_event, ctx) => {
-    turn.toolCalls = 0;
-    turn.usedSkillManage = false;
-    turn.readNames = new Set();
-    turn.cwd = ctx && ctx.cwd ? ctx.cwd : turn.cwd;
+    if (turn.toolCalls === 0) resetTurn(ctx);
+    else if (ctx && ctx.cwd) turn.cwd = ctx.cwd;
+  });
+
+  pi.on("tool_call", (event) => {
+    noteTool(event);
+    return undefined;
   });
 
   pi.on("tool_execution_end", (event) => {
-    turn.toolCalls += 1;
-    const name = String((event && (event.toolName || event.name)) || "");
-    if (name === "skill_manage") turn.usedSkillManage = true;
-    const args = (event && (event.args || event.arguments)) || {};
-    const filePath = String(args.path || args.file_path || args.filePath || "");
-    if (name === "read" && /SKILL\.md$/i.test(filePath)) {
-      const parts = filePath.replace(/\\/g, "/").split("/");
-      const idx = parts.lastIndexOf("skills");
-      if (idx >= 0 && parts[idx + 1] && parts[idx + 2] === "SKILL.md" && !parts[idx + 1].startsWith(".")) {
-        turn.readNames.add(parts[idx + 1]);
-      }
-    }
+    noteTool(event);
   });
 
   pi.on("agent_end", (event, ctx) => {
@@ -227,18 +265,30 @@ function skillLearningExtension(pi) {
       if (ctx && ctx.cwd) turn.cwd = ctx.cwd;
       const root = currentRoot(turn.cwd);
       const cfg = store.loadConfig(root);
-      if (!cfg.enabled || !cfg.reviewEnabled) return;
-      if (turn.usedSkillManage) return;
+      if (!cfg.enabled || !cfg.reviewEnabled) {
+        logEnqueue(root, `skip disabled tools=${turn.toolCalls}`);
+        return;
+      }
+      if (turn.usedSkillManage) {
+        logEnqueue(root, `skip skill_manage-already tools=${turn.toolCalls}`);
+        return;
+      }
       const minCalls = Number(cfg.reviewAfterToolCalls || 10);
-      if (turn.toolCalls < minCalls) return;
+      if (turn.toolCalls < minCalls) {
+        logEnqueue(root, `skip too-few tools=${turn.toolCalls} min=${minCalls}`);
+        return;
+      }
       const now = Date.now();
-      if (now - lastReviewAt < Number(cfg.minReviewIntervalSec || 120) * 1000) return;
+      if (now - lastReviewAt < Number(cfg.minReviewIntervalSec || 120) * 1000) {
+        logEnqueue(root, `skip cooldown tools=${turn.toolCalls}`);
+        return;
+      }
 
       const qdir = store.queueDir(root);
       store.ensureDir(qdir);
       const existing = fs
         .readdirSync(qdir)
-        .filter((f) => f.endsWith(".json") && !f.includes(".done") && !f.includes(".err") && !f.includes(".lock"));
+        .filter((f) => f.endsWith(".json") && !f.includes(".done") && !f.includes(".err") && !f.includes(".lock") && !f.includes(".skip"));
       const maxQueue = Number(cfg.maxQueue || 2);
       if (existing.length >= maxQueue) {
         existing.sort();
@@ -251,37 +301,44 @@ function skillLearningExtension(pi) {
         }
       }
 
-      const packed = store.packMessages(event && event.messages);
-      const catalog = store.listSkills(root);
-      const mentioned = new Set();
-      const blob = JSON.stringify(packed.messages).toLowerCase();
-      for (const s of catalog) {
-        if (blob.includes(String(s.name).toLowerCase())) mentioned.add(s.name);
-      }
-      const bodyNames = [...mentioned].concat(catalog.map((s) => s.name).filter((n) => !mentioned.has(n))).slice(0, 5);
-      const skillBodies = [];
-      for (const name of bodyNames) {
-        try {
-          skillBodies.push({ name, content: store.readSkill(root, name).slice(0, 12000) });
-        } catch {
-          /* ignore */
+      const sourceMessages =
+        event && Array.isArray(event.messages) && event.messages.length ? event.messages : turn.trace;
+      const packed = store.packMessages(sourceMessages);
+      if ((!packed.messages || packed.messages.length < 2) && turn.trace.length) {
+        const traced = store.packMessages(turn.trace);
+        if (traced.messages.length > packed.messages.length) {
+          packed.messages = traced.messages;
+          packed.chars = traced.chars;
+          packed.truncated = traced.truncated;
         }
       }
+      const picked = store.selectReviewBodies(root, JSON.stringify(packed.messages));
       const id = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
       const job = {
         v: 1,
         id,
+        pluginVersion: PLUGIN_VERSION,
         workspace: turn.cwd || null,
         toolCallCount: turn.toolCalls,
         createdAt: new Date().toISOString(),
-        learnedCatalog: catalog.map((s) => ({ name: s.name, description: s.description })),
-        skillBodies,
+        learnedCatalog: picked.catalog.map((s) => ({ name: s.name, description: s.description })),
+        skillBodies: picked.skillBodies,
         ...packed,
       };
       store.atomicWrite(path.join(qdir, `${id}.json`), `${JSON.stringify(job)}\n`);
+      store.atomicWrite(
+        path.join(store.metaDir(root), "last-enqueue.json"),
+        `${JSON.stringify({ id, pluginVersion: PLUGIN_VERSION, toolCallCount: turn.toolCalls, at: job.createdAt, bodies: picked.skillBodies.map((s) => s.name) }, null, 2)}\n`,
+      );
       lastReviewAt = now;
-    } catch {
-      // never break the session
+      logEnqueue(root, `enqueued ${id} tools=${turn.toolCalls} msgs=${packed.messages.length} bodies=${picked.skillBodies.length}`);
+    } catch (err) {
+      try {
+        const root = currentRoot(turn.cwd);
+        logEnqueue(root, `enqueue-fail ${err && err.message ? err.message : err}`);
+      } catch {
+        /* ignore */
+      }
     }
   });
 }

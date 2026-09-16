@@ -472,6 +472,28 @@ function packMessages(messages, budget = 180000) {
   return { messages: out, truncated: out.length < list.length, chars: used };
 }
 
+function selectReviewBodies(root, transcriptBlob, limit = 5) {
+  const catalog = listSkills(root);
+  const blob = String(transcriptBlob || "").toLowerCase();
+  const mentioned = [];
+  const rest = [];
+  for (const s of catalog) {
+    if (s.name && blob.includes(String(s.name).toLowerCase())) mentioned.push(s);
+    else rest.push(s);
+  }
+  rest.sort((a, b) => String(b.last_activity_at || "").localeCompare(String(a.last_activity_at || "")));
+  const ordered = mentioned.concat(rest).slice(0, limit);
+  const skillBodies = [];
+  for (const s of ordered) {
+    try {
+      skillBodies.push({ name: s.name, content: readSkill(root, s.name).slice(0, 12000) });
+    } catch {
+      /* ignore */
+    }
+  }
+  return { catalog, skillBodies };
+}
+
 function moveFileIfPresent(src, dest) {
   if (!fs.existsSync(src) || fs.existsSync(dest)) return false;
   ensureDir(path.dirname(dest));
@@ -576,6 +598,7 @@ module.exports = {
   structureErrors,
   flattenMessage,
   packMessages,
+  selectReviewBodies,
   validateName,
   migrateNestedLearned,
 };
