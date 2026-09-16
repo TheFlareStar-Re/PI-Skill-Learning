@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "cn.star.skill-learning",
   "name": "Skill Learning",
-  "version": "0.1.4",
+  "version": "0.1.7",
   "description": "Turns finished agent work into reusable SKILL.md files under ~/.agents/skills/.",
   "author": "TheFlareStar",
   "license": "MIT",

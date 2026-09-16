@@ -12,6 +12,7 @@ INCLUDE = [
     "src/extension.js",
     "src/skill-store.js",
     "src/review-prompt.js",
+    "src/prompt-compose.js",
     "skills/skill-learning.md",
     "views/library.html",
 ]

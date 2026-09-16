@@ -17,7 +17,9 @@ function loadLocal(rel) {
 
 const store = loadLocal("./skill-store.js");
 const prompts = loadLocal("./review-prompt.js");
-const PLUGIN_VERSION = "0.1.4";
+const compose = loadLocal("./prompt-compose.js");
+const PLUGIN_VERSION = "0.1.7";
+const PLUGIN_ID = "cn.star.skill-learning";
 
 let Type;
 try {
@@ -107,6 +109,12 @@ function skillLearningExtension(pi) {
   } catch {
     /* ignore */
   }
+  try {
+    const cfg = store.loadConfig(store.learnedRoot({ scope: "global" }));
+    compose.writeFragment(PLUGIN_ID, cfg.enabled ? prompts.NUDGE : "");
+  } catch (err) {
+    compose.log(`init-fail ${err && err.message ? err.message : err}`);
+  }
 
   pi.registerTool({
     name: "skill_manage",
@@ -187,18 +195,10 @@ function skillLearningExtension(pi) {
     },
   });
 
-  pi.on("before_agent_start", async (event) => {
-    try {
-      const root = currentRoot(event && event.cwd);
-      const cfg = store.loadConfig(root);
-      if (!cfg.enabled) return undefined;
-      const base = typeof event.systemPrompt === "string" ? event.systemPrompt : "";
-      if (base.includes("## Skill learning")) return { systemPrompt: base };
-      return { systemPrompt: `${base.replace(/\s+$/, "")}\n\n${prompts.NUDGE}\n` };
-    } catch {
-      return undefined;
-    }
-  });
+  // Do not return { systemPrompt } — PI keeps only the last extension's
+  // replacement, which would wipe USER PROFILE. User Profile 0.1.4+ inlines
+  // this plugin's NUDGE from the installed review-prompt.js.
+  pi.on("before_agent_start", async () => undefined);
 
   pi.on("agent_start", (_event, ctx) => {
     turn.toolCalls = 0;
