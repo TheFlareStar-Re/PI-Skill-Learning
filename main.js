@@ -14,6 +14,11 @@ const apply = require("./src/review-apply.js");
 
 const PLUGIN_VERSION = "0.1.8";
 
+// Keep the final review request below the host message limit.
+const HOST_MESSAGE_CHAR_CAP = 190000;
+const RETRYABLE_SHRINK_RE =
+  /timed out|timeout|messages?\s+exceed(?:ed)?\s+\d+\s*k?\s+characters?|(?:context|prompt|input).{0,32}(?:too long|too large|length|limit)|(?:maximum|max).{0,32}(?:context|token|length)|too many tokens/i;
+
 let pollTimer;
 let running = false;
 
@@ -70,6 +75,16 @@ async function completeReview(modelKey, userContent) {
   return apply.completionText(completion);
 }
 
+function capReviewPrompt(user, maxChars = HOST_MESSAGE_CHAR_CAP) {
+  const text = String(user || "");
+  return text.length > maxChars ? apply.shrinkReviewUser(text, maxChars) : text;
+}
+
+function shouldRetryWithShrink(error) {
+  const message = String(error && error.message ? error.message : error);
+  return RETRYABLE_SHRINK_RE.test(message);
+}
+
 async function processJob(file) {
   const raw = fs.readFileSync(file, "utf8");
   const job = JSON.parse(raw);
@@ -80,13 +95,12 @@ async function processJob(file) {
     return;
   }
   const modelKey = await resolveModelKey(cfg.modelKey);
-  let user = prompts.packReviewUser(job);
+  let user = capReviewPrompt(prompts.packReviewUser(job));
   let text;
   try {
     text = await completeReview(modelKey, user);
   } catch (err) {
-    const msg = String(err && err.message ? err.message : err);
-    if (!/timed out|timeout/i.test(msg)) throw err;
+    if (!shouldRetryWithShrink(err)) throw err;
     text = await completeReview(modelKey, apply.shrinkReviewUser(user, 40000));
   }
   let parsed;
@@ -254,4 +268,11 @@ async function onPanelInvoke(channel) {
   return { error: `unknown channel ${channel}` };
 }
 
-module.exports = { onLoad, onUnload, onPanelInvoke };
+module.exports = {
+  onLoad,
+  onUnload,
+  onPanelInvoke,
+  capReviewPrompt,
+  shouldRetryWithShrink,
+  HOST_MESSAGE_CHAR_CAP,
+};
